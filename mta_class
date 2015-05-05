@@ -1,0 +1,514 @@
+//
+//  main.cpp
+//  MTA_Class
+//
+//  Created by Hannah Mendez on 12/15/14.
+//  Copyright (c) 2014 Hannah Mendez. All rights reserved.
+//
+#define _CRT_SECURE_NO_WARNINGS
+#define _USE_MATH_DEFINES
+#include <iostream>
+#include <math.h>
+#include <vector>
+#include <functional>
+#include <fstream>
+#include <string>
+#include <sstream>
+#include <vector>
+#include <list>
+#include <map>
+#include <queue>
+#include <stack>
+using namespace std;
+
+const int DEFAULT_VAL =  -1;
+const string DEFAULT_STR = "";
+
+//This code is from Prof. Hellerstein and Prof. Frankl
+double degrad(double d) {
+    return d * M_PI / 180;
+}
+// Code below is adapted from http://www.movable-type.co.uk/scripts/latlong.html
+// FYI: That website has an applet that computes the haversine distance.
+// It also has a link that will show the locations on a map,
+// with a line between them.
+double haverdist(double lat1, double longit1, double lat2, double longit2)
+{
+    double r = 3959;
+    double dlat = degrad(lat2 - lat1);
+    double dlongit = degrad(longit2 - longit1);
+    double a = sin(dlat / 2)*sin(dlat / 2) +
+    cos(degrad(lat1))*cos(degrad(lat2))*sin(dlongit / 2)*sin(dlongit / 2);
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return r*c;
+}
+
+// The MTA class, which utilizes all of the MTA code written in CS2134.
+// Contains a vector of trainStopData which holds every trainstop and it's data, as well
+// as a map of strings and list<string>'s with all the transfers for all stops.
+// Default constructor calls read_in, filling the containers using the files provided (MTA_train_stop_data.txt and transfers.txt).
+// Alternatively, both containers can be passed in when the constructor is called.
+class MTA{
+       // Class which contains the information of a train stop, i.e. stop_id, stop_name, latitude and longitude.
+    class trainStopData{
+    public:
+        trainStopData() {}
+        trainStopData(string id, string name, double la, double lo)
+        : stop_id(id), stop_name(name), stop_lat(la), stop_lon(lo) {}
+        
+        // returns the id
+        string get_id() const { return stop_id; }
+        // returns the stop name
+        string get_stop_name() const { return stop_name; }
+        // returns the latitude
+        double get_latitude() const { return stop_lat; }
+        // returns the longitude
+        double get_longitude() const { return stop_lon; }
+        class printTrainStopInfo{
+        public:
+            void operator() (trainStopData t) {
+                cout << t.get_id() << ' ' << t.get_stop_name() << ' '
+                << t.get_latitude() << ',' << t.get_longitude() << endl;
+            }
+        };
+    private:
+        string stop_id; // id of train stop (1st token)
+        string stop_name; // name of station (3rd token)
+        double stop_lat; // latitude of train stop location
+        double stop_lon; // longitude of train stop location
+    };
+public:
+    MTA() { read_in(); }
+    MTA(vector<trainStopData> v, map<string,list<string>> transfers) : info(v), adjacent(transfers) {}
+    
+    void tokenizer(char s[], vector<string>& tokens, const char delim[]);
+    template<class Obj, class Pred, class Op>
+    int perform_if(Obj start, Obj end, Pred pred, Op op);
+    class isStopOnRoute;
+    class isSubwayStop;
+    class isSubwayStopNearX;
+    
+    void menu();
+    
+private:
+    vector<trainStopData> info;
+    map<string,list<string>> adjacent;
+    
+    void read_in();
+    void display();
+    template<class Iter, class Comp>
+    Iter select_item(Iter start, Iter end, Comp pred);
+    class closest_stop;
+    map<string,list<string>> adjacencyList();
+    struct vertexInf;
+    void print_path(vector<string> result);
+    void print_transfers(string id, map<string,list<string>> transfers);
+    vector<string> get_path(string destination,  map<string,vertexInf>& trail);
+    vector<string> shortestpaths(map<string,list<string>>& transfers, string start, string end);
+};
+
+
+
+
+
+// CLASS CODE ------------------------------------------------------------------------------------------------------|
+
+
+
+
+
+// taken from lecture slides
+// tokenizes a cstring using delim, stores tokens in a vector<string>.
+void MTA::tokenizer(char s[], vector<string> & tokens, const char delim[]){
+    tokens.clear();
+    char * pch;
+    pch = strtok(s, delim);
+    while (pch != NULL){
+        tokens.push_back(pch);
+        pch = strtok(NULL, delim);
+    }
+}
+// A templated function that performs op whenever pred returns true, for a container
+// with iterators at the beginning and one past the end. pred and op must be functors
+// with overloaded bool () operators. Returns an int of how many times pred returned true
+// (how many times op was performed).
+template<class Object, class Pred, class Op>
+int MTA::perform_if(Object itrStart, Object itrEnd, Pred pred, Op op) {
+    
+    int count = 0;
+    Object itr;
+    
+    for (itr = itrStart; itr != itrEnd; ++itr) {
+        
+        if (pred(*itr)){
+            op(*itr);
+            count++;
+        }
+    }
+    return count;
+}
+// Functor that returns true if the stop passed in is on the route specified by the functor's member var.
+class MTA::isStopOnRoute{
+public:
+    
+    isStopOnRoute(char c) : route(c) {}
+    
+    bool operator() (trainStopData t) {
+        return t.get_id()[0] == route;
+    }
+private:
+    char route;
+};
+// Functor that returns true if the stop passed in matches the stop_id specified by the functor's member var.
+class MTA::isSubwayStop{
+public:
+    
+    isSubwayStop(string s) : stopId(s) {}
+    
+    bool operator() (trainStopData t) {
+        return t.get_id() == stopId;
+    }
+private:
+    string stopId;
+};
+// Functor that returns true if the stop passed in is near the stop specified by the functor's member vars.
+class MTA::isSubwayStopNearX{
+public:
+    
+    isSubwayStopNearX(double lat, double lon, double d) : latitude(lat), longitude(lon), d(d) {}
+    
+    bool operator() (trainStopData t) {
+        return (haverdist(latitude, longitude, t.get_latitude(), t.get_longitude()) <= d);
+        
+    }
+private:
+    double latitude;
+    double longitude;
+    double d;
+};
+// A function that reads the data from MTA_train_stop_data into a vector<trainStopData> container (info)
+// and reads the data from transfers.txt into the adjacency list, of type map<string,list<string>>.
+void MTA::read_in() {
+    
+    ifstream ifs;
+    ifs.open("MTA_train_stop_data.txt");
+    if (!ifs){
+        cerr << "file not found.";
+        exit(1);
+    }
+    string line;
+    vector<string> tokens;
+    vector<trainStopData> data;
+    const char delim[] = {','};
+    
+    while (getline(ifs, line)) {
+        
+        char *copy = new char[line.size() + 1];
+        strcpy(copy, line.c_str());
+        tokenizer(copy, tokens, delim);
+        if (tokens[0].size() == 3) {
+            data.push_back(trainStopData(tokens[0], tokens[1], stod(tokens[2]), stod(tokens[3])));
+            tokens.clear();
+        }
+    }
+    ifs.close();
+    info = data;
+    adjacent = adjacencyList();
+}
+// Uses iterators to traverse the container and returns an iterator to the place where pred returned true.
+// If pred never returns true, the iterator will point to "end", the place after the last element in the container, nullptr.
+template<class Iterator, class Comparator>
+Iterator MTA::select_item(Iterator start, Iterator end, Comparator pred) {
+    
+    Iterator tmp_itr = end;
+    
+    while (start != end) {
+        if (pred(*start++)) {
+            tmp_itr = start;
+        }
+    }
+    return tmp_itr;
+}
+// A functor that takes in coordinates and determines the closest train stop, using a pre-determined shortest distance.
+// Shortest distance is set equal to the distance given, if the distance given is less than the shortest distance.
+// returns true if the stop is close enough, and false if no trainstop is found.
+class MTA::closest_stop {
+public:
+    closest_stop(double lat, double lon) : latitude(lat), longitude(lon) {
+        shortest_dist = numeric_limits<double>::max();
+    }
+    bool operator() (trainStopData t) {
+        double distance = haverdist(latitude, longitude, t.get_latitude(), t.get_longitude());
+        if (distance < shortest_dist) {
+            shortest_dist = distance;
+            return true;
+        }
+        return false;
+    }
+private:
+    double latitude;
+    double longitude;
+    double shortest_dist;
+};
+// A function that presents the interactive menu to the user.
+void MTA::menu() {
+    
+    trainStopData::printTrainStopInfo print;
+    
+    while (true) {
+        
+        cout << "Type: " << endl << "R for info on a route." << endl <<"S for info on a stop (including transfers)." << endl <<
+        "T for all trainstops within a certain distance." << endl << "C to find the closest stop to you." << endl <<
+        "D to get directions to a certain trainstop." << endl << "Q to quit." << endl;
+        
+        char choice;
+        cin >> choice;
+        
+        int items_found;
+        string trainstop;
+        char route;
+        double latitude, longitude, distance;
+        
+        switch (choice) {
+                
+            case 'C':{
+                double lon;
+                double lat;
+                
+                cout << "Enter your coordinates to determine the stop closest to you: " << endl;
+                cout << "Latitude: ";
+                cin >> lon;
+                cout << "Longitude: ";
+                cin >> lat;
+                
+                closest_stop c(lon, lat);
+                vector<trainStopData>::iterator stop = select_item(info.begin(), info.end(), c);
+                if (stop != info.end())
+                    cout << stop->get_id() << ' ' << stop->get_stop_name() << ' ' << stop->get_latitude() << ' ' << stop->get_longitude();
+                else {
+                    
+                    cout << "No stop found. Please try again.";
+                }
+                break;
+            }
+            case 'R':{
+                cout << "Which route?  " << endl;
+                cin >> route;
+                items_found = perform_if(info.begin(), info.end(), isStopOnRoute(route), print);
+                cout << items_found << " found." << endl;
+                
+                break;
+            }
+            case 'S':{
+                cout << "Which stop (enter trainstop ID)?  " << endl;
+                cin >> trainstop;
+                items_found = perform_if(info.begin(), info.end(), isSubwayStop(trainstop), print);
+                cout << items_found << " found." << endl;
+                
+                cout << "Transfers from this station: " << endl;
+                print_transfers(trainstop, adjacent);
+                
+                break;
+            }
+            case 'T':{
+                cout << "What is your latitude?  ";
+                cin >> latitude;
+                cout << "What is your longitude?  ";
+                cin >> longitude;
+                cout << "What is the max distance for the search?  ";
+                cin >> distance;
+                items_found = perform_if(info.begin(), info.end(), isSubwayStopNearX(latitude, longitude, distance), print);
+                cout << items_found << " found.\n\n\n" << endl;
+                
+                break;
+            }
+            case 'D':{
+                string start, destination;
+                double lat1, lon1, lat2, lon2, dist1, dist2;
+                cout << "What is your latitude?  ";
+                cin >> lat1;
+                cout << "What is your longitude?  ";
+                cin >> lon1;
+                cout << "Where would you like to go? " << endl << "Latitude: ";
+                cin >> lat2;
+                cout << "Longitude: ";
+                cin >> lon2;
+                
+                closest_stop one(lat1, lon1);
+                closest_stop two(lat2, lon2);
+                vector<trainStopData>::iterator begin = select_item(info.begin(), info.end(), one);
+                vector<trainStopData>::iterator end = select_item(info.begin(), info.end(), two);                
+                dist1 = haverdist(lat1, lon1, begin->get_latitude(), begin->get_longitude());
+                dist2 = haverdist(end->get_latitude(), end->get_longitude(), lat2, lon2);
+                
+                cout << "Walk " << dist1 << " miles to the subway station " << begin->get_id() << ' ' << begin->get_stop_name() << endl;
+                cout << "Take this path to the closest station to your desired destination: ";
+                print_path(shortestpaths(adjacent,begin->get_id(),end->get_id()));
+                cout << "Walk " << dist2 << " miles to your destination.\n" << endl;
+            }
+            case 'Q':{
+                return;
+            }
+            default:
+                cout << "Invalid entry.  Type Q to exit.";
+        }
+    }
+}
+// A function that displays "info" and "adjacency", the two private member variables of the class.
+void MTA::display() {
+    
+    cout << "Train Data: \n" << endl;
+    trainStopData::printTrainStopInfo print;
+    for (trainStopData t : info) print(t);
+    cout << "\n\n\n" << endl;
+    cout << "Adjacency/Transfers: \n" << endl;
+    
+    for (map<string,list<string>>::iterator itr = adjacent.begin(); itr != adjacent.end(); ++itr) {
+        cout << itr->first << ": ";
+        
+        for (list<string>::iterator itr2 = itr->second.begin(); itr2 != itr->second.end(); ++itr2) {
+            cout << *itr2 << ' ';
+        }
+        cout << endl;
+    }
+}
+// Function to read in adjacency list.
+// assumes "info" contains at least three objects of type trainStopData
+map<string,list<string>> MTA::adjacencyList() {
+    
+    map<string,list<string>> adjacent;
+    vector<trainStopData>::iterator prev = info.begin() - 1, itr = info.begin(), next = info.begin() + 1;
+    string line;
+    vector<string> tokens;
+    ifstream ifs;
+    
+    ifs.open("transfers.txt");
+    if (!ifs) {
+        cerr << "could not open file" << endl;
+        exit(1);
+    }
+    while (getline(ifs, line)) {
+        
+        char* copy = new char[line.size() + 1];
+        const char delim[] = { ',' };
+        strcpy(copy, line.c_str());
+        tokenizer(copy, tokens, delim);
+        delete copy;
+        
+        if (adjacent[tokens[0]].empty()) {
+            
+            list<string> transfers;
+            
+            if (itr != info.begin() && (prev->get_id()[0] == tokens[0][0])) {
+                transfers.push_front(prev->get_id());
+                
+            }
+            if (next != info.end() && (next->get_id()[0] == tokens[0][0])){
+                transfers.push_front(next->get_id());
+            }
+            adjacent[tokens[0]] = transfers;
+            tokens.clear();
+            transfers.clear();
+            
+            prev++, itr++, next++;
+        }
+        else{
+            adjacent[tokens[0]].push_front(tokens[1]);
+            tokens.clear();
+        }
+    }
+    ifs.close();
+    return adjacent;
+}
+// Struct used to store info for shortestpaths.
+struct MTA::vertexInf                    // Stores information for a vertex
+{
+    int dist;  // distance to vertex from the source
+    string prev;  // previous node in BFS tree
+};
+// Prints the shortest path found in shortestpaths.
+void MTA::print_path(vector<string> result)
+{
+    cout << "Shortest path: ";
+    for(int i = 0; i < result.size(); ++i){
+        cout << result[i];
+        if (result[i] != *(result.end() - 1)) cout << " -> ";
+    }
+    cout << endl;
+}
+void MTA::print_transfers(string id, map<string,list<string>> transfers) {
+    list<string>::iterator itr;
+    for (itr = transfers[id].begin(); itr != transfers[id].end(); ++itr) {
+        cout << *itr << endl;
+    }
+}
+// Gets the shortest path to the destination.
+// Pass in the destination stop_id, as well as the trail map created in shortestpaths.
+vector<string> MTA::get_path(string destination,  map<string,vertexInf>& trail)
+{
+    stack<string> t;
+    vector<string> shortest_path;
+    
+    string current = destination;
+    while (current != DEFAULT_STR)
+    {
+        t.push(current);
+        current = trail[current].prev;
+    }
+    while (!t.empty())
+    {
+        shortest_path.push_back(t.top());
+        t.pop();
+    }
+    return shortest_path;
+}
+
+//  Sample code modified for use with a map instead of a vector.
+// Finds the shortest path from stop_id start to stop_id end.
+vector<string> MTA::shortestpaths(map<string,list<string>>& transfers, string start, string end)
+{
+    queue<string> q;             // q is the queue of stop id's.
+    map<string,list<string>>::iterator itr;
+    
+    map<string,vertexInf> trail;
+    
+    for (itr = transfers.begin(); itr != transfers.end(); ++itr)  {       // Initialize distances and prev value
+        trail[itr->first].dist = DEFAULT_VAL;
+        trail[itr->first].prev = DEFAULT_STR;
+        
+    }
+    trail[start].dist = 0;
+    
+    q.push(start);
+    while  (!q.empty() )
+    {
+        string v = q.front();
+        q.pop();
+        for (list<string>::const_iterator w = transfers[v].begin(); w != transfers[v].end(); w++)
+        {
+            
+            if (trail[*w].dist == DEFAULT_VAL)          // distance of *w from source not determined yet
+            {
+                trail[*w].dist = trail[v].dist+1;
+                trail[*w].prev = v;
+                q.push(*w);
+            }
+        }
+    }
+    return get_path(end, trail);
+}
+
+
+
+
+int main(int argc, const char * argv[]) {
+    
+    MTA trainstops;
+    
+    trainstops.menu();
+    
+    return 0;
+}
+
+
+
